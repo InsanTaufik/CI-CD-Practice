@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - "**"
+  workflow_dispatch:  # manual trigger from GitHub Actions UI
 
 jobs:
   test:
@@ -177,3 +178,55 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  performance:
+    name: Performance Test (Locust)
+    runs-on: ubuntu-latest
+    needs: test
+    if: |
+      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+      github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt locust
+
+      - name: Start Flask API (staging config)
+        run: |
+          ENV=staging PORT=5001 FEATURE_NEW_CHECKOUT=true \
+          python app/api.py &
+          echo "[INFO] Menunggu server siap..."
+          sleep 3
+
+      - name: Run Locust headless
+        run: |
+          mkdir -p reports
+          locust \
+            -f performance/locustfile.py \
+            --host http://localhost:5001 \
+            --headless \
+            --users 50 \
+            --spawn-rate 10 \
+            --run-time 60s \
+            --html reports/locust-report.html \
+            --csv reports/locust \
+            --exit-code-on-error 1
+
+      - name: Upload Locust HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: locust-performance-report
+          path: |
+            reports/locust-report.html
+            reports/locust_stats.csv
+            reports/locust_failures.csv
