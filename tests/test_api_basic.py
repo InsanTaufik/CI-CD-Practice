@@ -43,6 +43,14 @@ def test_get_items_content_type_json(client):
     assert "application/json" in response.content_type
 
 
+def test_get_items_exact_count(client):
+    """Daftar item harus memiliki tepat 3 item."""
+    response = client.get("/items")
+    data = response.get_json()
+    print(f"[INFO] Jumlah item: {len(data)} (diharapkan: 3)")
+    assert len(data) == 3, f"expected 3 but got {len(data)}"
+
+
 # -- Edge cases ---------------------------------------------------------------
 
 def test_get_items_empty_list(client):
