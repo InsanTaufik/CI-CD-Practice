@@ -1,5 +1,6 @@
 flask
 python-dotenv
+prometheus_client
 pytest
 pytest-html
 requests

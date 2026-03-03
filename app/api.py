@@ -1,6 +1,9 @@
 from flask import Flask, jsonify
 import os
 from dotenv import load_dotenv
+from prometheus_client import Counter, Histogram, make_wsgi_app
+from werkzeug.middleware.dispatcher import DispatcherMiddleware
+import time
 
 # Load env file based on ENV var, fallback to .env.staging for local dev
 env_name = os.environ.get("ENV", "staging")
@@ -8,6 +11,44 @@ env_file = f".env.{env_name}" if env_name in ("staging", "prod", "production") e
 load_dotenv(dotenv_path=env_file, override=False)  # override=False: real env vars take priority
 
 app = Flask(__name__)
+
+# --- Prometheus metrics ------------------------------------------------------
+REQUEST_COUNT = Counter(
+    "api_requests_total",
+    "Total number of requests per endpoint and method",
+    ["method", "endpoint", "http_status"],
+)
+REQUEST_LATENCY = Histogram(
+    "api_request_latency_seconds",
+    "Request latency in seconds",
+    ["endpoint"],
+)
+
+# Mount /metrics as a separate WSGI app (Prometheus standard)
+app.wsgi_app = DispatcherMiddleware(app.wsgi_app, {
+    "/metrics": make_wsgi_app()
+})
+
+
+@app.before_request
+def _start_timer():
+    from flask import g, request
+    g._start_time = time.time()
+
+
+@app.after_request
+def _record_metrics(response):
+    from flask import g, request
+    latency = time.time() - getattr(g, "_start_time", time.time())
+    REQUEST_COUNT.labels(
+        method=request.method,
+        endpoint=request.path,
+        http_status=response.status_code,
+    ).inc()
+    REQUEST_LATENCY.labels(endpoint=request.path).observe(latency)
+    return response
+
+# -----------------------------------------------------------------------------
 
 ITEMS = [
     {"id": 1, "name": "Item Satu"},
@@ -38,5 +79,8 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     env = os.environ.get("ENV", "development")
     print(f"[INFO] Menjalankan server di lingkungan: {env}, port: {port}")
+    print(f"[INFO] FEATURE_NEW_CHECKOUT: {os.environ.get('FEATURE_NEW_CHECKOUT', 'false')}")
+    print(f"[INFO] Metrics tersedia di: http://localhost:{port}/metrics")
+    app.run(host="0.0.0.0", port=port, debug=(env != "production"))
     print(f"[INFO] FEATURE_NEW_CHECKOUT: {os.environ.get('FEATURE_NEW_CHECKOUT', 'false')}")
     app.run(host="0.0.0.0", port=port, debug=(env != "production"))
