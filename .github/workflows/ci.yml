@@ -12,6 +12,9 @@ jobs:
   test:
     name: Run Pytest
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Checkout repository
@@ -24,10 +27,41 @@ jobs:
           cache: "pip"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest-html
+        run: pip install -r requirements.txt pytest-html junit-xml
 
       - name: Run tests
-        run: pytest --junitxml=reports/test-results.xml --html=reports/test-report.html --self-contained-html
+        id: run_tests
+        run: |
+          pytest --junitxml=reports/test-results.xml --html=reports/test-report.html --self-contained-html
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Parse JUnit XML and set summary env vars
+        if: always()
+        id: junit
+        run: |
+          python - <<'EOF'
+          import xml.etree.ElementTree as ET, os
+
+          tree = ET.parse("reports/test-results.xml")
+          root = tree.getroot()
+          suite = root if root.tag == "testsuite" else root.find("testsuite")
+
+          tests   = suite.get("tests", "0")
+          failed  = suite.get("failures", "0")
+          errors  = suite.get("errors", "0")
+          skipped = suite.get("skipped", "0")
+          passed  = str(int(tests) - int(failed) - int(errors) - int(skipped))
+          time    = suite.get("time", "0")
+
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"JUNIT_TESTS={tests}\n")
+              f.write(f"JUNIT_PASSED={passed}\n")
+              f.write(f"JUNIT_FAILED={failed}\n")
+              f.write(f"JUNIT_ERRORS={errors}\n")
+              f.write(f"JUNIT_SKIPPED={skipped}\n")
+              f.write(f"JUNIT_TIME={time}\n")
+          EOF
 
       - name: Upload JUnit XML report
         if: always()
@@ -42,3 +76,104 @@ jobs:
         with:
           name: html-test-report
           path: reports/test-report.html
+
+      - name: Post PR comment with test summary
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const total   = process.env.JUNIT_TESTS;
+            const passed  = process.env.JUNIT_PASSED;
+            const failed  = process.env.JUNIT_FAILED;
+            const errors  = process.env.JUNIT_ERRORS;
+            const skipped = process.env.JUNIT_SKIPPED;
+            const time    = parseFloat(process.env.JUNIT_TIME).toFixed(2);
+
+            const status  = (parseInt(failed) + parseInt(errors)) > 0 ? '❌ Tests Failed' : '✅ All Tests Passed';
+            const runUrl  = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            const body = [
+              `## ${status}`,
+              ``,
+              `| | Result |`,
+              `|---|---|`,
+              `| 🧪 Total    | ${total}  |`,
+              `| ✅ Passed   | ${passed} |`,
+              `| ❌ Failed   | ${failed} |`,
+              `| 💥 Errors   | ${errors} |`,
+              `| ⏭️ Skipped  | ${skipped}|`,
+              `| ⏱️ Duration | ${time}s  |`,
+              ``,
+              `📦 [View full artifacts](${runUrl})`,
+            ].join('\n');
+
+            // Update existing bot comment instead of spamming new ones
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('All Tests Passed') || 
+              c.user.type === 'Bot' && c.body.includes('Tests Failed')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Fail job if tests failed
+        if: steps.run_tests.outputs.exit_code != '0'
+        run: exit 1
+
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: app/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

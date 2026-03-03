@@ -77,3 +77,31 @@ def test_404_response_has_error_key(client):
     print(f"[INFO] Isi respons 404: {data}")
     assert data is not None
     assert "error" in data
+
+
+# -- Feature flag tests (parametrized) ---------------------------------------
+
+import pytest
+
+
+@pytest.mark.parametrize("flag_value,expect_field", [
+    ("true",  True),
+    ("false", False),
+])
+def test_feature_flag_new_checkout(client, monkeypatch, flag_value, expect_field):
+    """Parametrized: validasi perilaku FEATURE_NEW_CHECKOUT=true/false."""
+    monkeypatch.setenv("FEATURE_NEW_CHECKOUT", flag_value)
+    response = client.get("/items")
+    data = response.get_json()
+    print(f"[INFO] FEATURE_NEW_CHECKOUT={flag_value} → item[0]: {data[0]}")
+    assert response.status_code == 200
+    if expect_field:
+        for item in data:
+            assert item.get("new_feature") is True, (
+                f"Diharapkan 'new_feature'=True saat flag=true, dapat: {item}"
+            )
+    else:
+        for item in data:
+            assert "new_feature" not in item, (
+                f"'new_feature' tidak boleh ada saat flag=false, dapat: {item}"
+            )
