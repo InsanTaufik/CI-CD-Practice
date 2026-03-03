@@ -5,7 +5,8 @@ app = Flask(__name__)
 ITEMS = [
     {"id": 1, "name": "Item Satu"},
     {"id": 2, "name": "Item Dua"},
-]  # BUG: Item Tiga dihapus — sengaja untuk simulasi CI gagal
+    {"id": 3, "name": "Item Tiga"},
+]
 
 
 @app.route("/items", methods=["GET"])
