@@ -173,4 +173,3 @@ This project demonstrates a real PR → CI fail → fix → pass → merge cycle
 3. Branch protection on `main` ensures CI must pass before merge is allowed
 
 **Key takeaway:** Never merge a PR while CI is red.
-
